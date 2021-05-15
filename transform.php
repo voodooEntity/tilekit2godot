@@ -141,10 +141,11 @@ class Transformer {
                 if(!isset($this->tileIndex[$cell])) {
                     
                     // first we check the line we are in
-                    $line = floor($cell / $tilesPerLine);
+                    $ic   = $cell - 1;
+                    $line = floor($ic / $tilesPerLine);
                     
                     // now we get the subposition
-                    $subPos =  $cell % $tilesPerLine;
+                    $subPos =  $ic % $tilesPerLine;
                     
                     // store the data in mapped tile index for later use
                     $this->tileIndex[$cell] = [
@@ -170,6 +171,7 @@ class Transformer {
         foreach($this->tileIndexMapping as $index => $tile) {
             $this->godotTileset .= $this->buildGodotTilesetEntry(
                                         $index,
+                                        $tile,
                                         $this->tileIndex[$tile]["x"],
                                         $this->tileIndex[$tile]["y"]
                                     );
@@ -177,13 +179,13 @@ class Transformer {
     }
     
     
-    public function buildGodotTilesetEntry($id,$x,$y) {
+    public function buildGodotTilesetEntry($id,$tile,$x,$y) {
         // prefetch 
         $tileWidth  = $this->tileWidth;
         $tileHeight = $this->tileHeight;
         
         // build the neccesary lines
-        $tilesetEntry  = $id . "/name = \"tile " . $id . "\"\n";
+        $tilesetEntry  = $id . "/name = \"tile " . $tile . "\"\n";
         $tilesetEntry .= $id . "/texture = ExtResource( 1 )\n";
         $tilesetEntry .= $id . "/tex_offset = Vector2( 0, 0 )\n";
         $tilesetEntry .= $id . "/modulate = Color( 1, 1, 1, 1 )\n";
@@ -224,7 +226,7 @@ tile_data = PoolIntArray(";
             if(0 !== $cell) {
             
                 // calculate current index position
-                $line      = ceil($ic / $this->mapWidth);
+                $line      = floor($ic / $this->mapWidth);
                 $subPos    = $ic % $this->mapWidth;
                 $currIndex = ($line * $this->godotxMax) + $subPos;
                 
