@@ -18,10 +18,11 @@ array_shift($argv);
 
 // get possible params and values
 $cli = new Cli($argv);
-$cli->registerParam("tileset",true);
+$cli->registerParam("verbose",false);
 $cli->registerParam("input",true);
 $cli->registerParam("output",true);
-$cli->registerParam("verbose",false);
+$cli->registerParam("gdPath",true);
+$cli->registerParam("tileset",true);
 $arrOptions = $cli->parse();
 
 // run the transformer
@@ -29,24 +30,50 @@ $transformer = new Transformer($arrOptions);
 $transformer->readTilesetImage();
 $transformer->parseTilekitFile();
 $transformer->createMappedTileIndex();
-$transformer->
+$transformer->buildGodotTileset();
+$transformer->buildGodotTilemap();
+$transformer->concatPreparedGodotOutput();
+$transformer->writeGodotSceneExport();
 
 
 
 class Transformer {
     
-    
+    // cli arg extracted options
     public $options;
+
+    // plain json decoded tilekit data
     public $tkData;
+    
+    // map reso
     public $mapWidth;
     public $mapHeight;
+    
+    // tile reso
     public $tileWidth;
     public $tileHeight;
-    public $tilekitData;
+    
+    // extracted tilekit map data
+    public $tilekitMapData;
+    
+    // tileset image name
     public $tilesetImage;
+    
+    // tileset image reso
     public $tilesetImageWidth;
     public $tilesetImageHeight;
-    public $mappedTileIndex = [];
+    
+    // enriched tile index & mapping 
+    public $tileIndex = [];
+    public $tileIndexMapping = [];
+    
+    // output stores
+    public $godotTileset;
+    public $godotTilemap;
+    public $godotScene;
+    
+    // godot vars
+    public $godotxMax = 65536; 
     
     
     public function __construct($options) {
@@ -75,7 +102,7 @@ class Transformer {
         $this->tileHeight = $this->tkData["map"]["tile_h"];
         
         // store tilekit MapData
-        $this->tilekitData = $this->tkData["map"]["data"];
+        $this->tilekitMapData = $this->tkData["map"]["data"];
     }
     
     
@@ -101,16 +128,17 @@ class Transformer {
     
     public function createMappedTileIndex() {
         // predefinitions
+        $i = 0;
         $tilesPerLine = $this->tilesetImageWidth / $this->tileWidth;
         
         // lets go through all the cells
-        foreach($this->tilekitData as $cell) {
+        foreach($this->tilekitMapData as $cell) {
             
             // lets ignore the 0 blanks
             if(0 !== $cell) {
             
                 // did we recognize that cell's tile id allready?
-                if(!isset($this->mappedTileIndex[$cell])) {
+                if(!isset($this->tileIndex[$cell])) {
                     
                     // first we check the line we are in
                     $line = floor($cell / $tilesPerLine);
@@ -119,26 +147,34 @@ class Transformer {
                     $subPos =  $cell % $tilesPerLine;
                     
                     // store the data in mapped tile index for later use
-                    $this->mappedTileIndex[$cell] = [
-                        "x" => $subPos * $this->tileWidth,
-                        "y" => $line   * $this->tileHeight
+                    $this->tileIndex[$cell] = [
+                        "x"      => $subPos * $this->tileWidth,
+                        "y"      => $line   * $this->tileHeight,
+                        "rIndex" => $i 
                     ];
+                    
+                    // add it to the tileIndexMapping and upcount i
+                    $this->tileIndexMapping[$i] = $cell;
+                    $i++;
                 }
             }
         }
     }
     
     
-    public function buildTileset() {
+    public function buildGodotTileset() {
         // tileset opening
-        $tileset = "[sub_resource type=\"TileSet\" id=1]\n";
+        $this->godotTileset = "\n[sub_resource type=\"TileSet\" id=1]\n";
         
         // for each recogniced tile
-        foreach($this->mappedTileIndex as $tile) {
-            $
+        foreach($this->tileIndexMapping as $index => $tile) {
+            $this->godotTileset .= $this->buildGodotTilesetEntry(
+                                        $index,
+                                        $this->tileIndex[$tile]["x"],
+                                        $this->tileIndex[$tile]["y"]
+                                    );
         }
     }
-    
     
     
     public function buildGodotTilesetEntry($id,$x,$y) {
@@ -147,7 +183,7 @@ class Transformer {
         $tileHeight = $this->tileHeight;
         
         // build the neccesary lines
-        $tilesetEntry  = $id . "/name = tile " . $id . "\n";
+        $tilesetEntry  = $id . "/name = \"tile " . $id . "\"\n";
         $tilesetEntry .= $id . "/texture = ExtResource( 1 )\n";
         $tilesetEntry .= $id . "/tex_offset = Vector2( 0, 0 )\n";
         $tilesetEntry .= $id . "/modulate = Color( 1, 1, 1, 1 )\n";
@@ -163,6 +199,78 @@ class Transformer {
         $tilesetEntry .= $id . "/z_index = 0\n";
         
         return $tilesetEntry;
+    }
+    
+    
+    public function buildGodotTilemap() {
+        // presettings
+        $tileWidth  = $this->tileWidth;
+        $tileHeight = $this->tileHeight;
+        $cx = 0;
+        $cy = 0;
+        
+        // tileset opening
+        $this->godotTilemap = "\n[node name=\"TileMap\" type=\"TileMap\" parent=\".\"]\n";
+        $this->godotTilemap .= "tile_set = SubResource( 1 )
+cell_size = Vector2( $tileWidth, $tileHeight )
+cell_custom_transform = Transform2D( $tileWidth, 0, 0, $tileHeight, 0, 0 )
+format = 1
+tile_data = PoolIntArray(";
+        
+        // for each recogniced tile
+        foreach($this->tilekitMapData as $ic => $cell) {
+
+            // lets ignore the 0 blanks
+            if(0 !== $cell) {
+            
+                // calculate current index position
+                $line      = ceil($ic / $this->mapWidth);
+                $subPos    = $ic % $this->mapWidth;
+                $currIndex = ($line * $this->godotxMax) + $subPos;
+                
+                $this->godotTilemap .= " " . $currIndex . ", " . $this->tileIndex[$cell]["rIndex"] . ", 0,";
+            }
+        }
+        
+        // remove the last comma
+        $this->godotTilemap = rtrim($this->godotTilemap,",");
+        
+        // finish the string
+        $this->godotTilemap .= ")\n\n";
+    }
+    
+    public function concatPreparedGodotOutput() {
+        // presettings
+        $tilesetImageFile = "res://";
+        if(isset($this->options["gdPath"])) {
+            $tilesetImageFile .= $this->options["gdPath"] . "/";
+        }
+        $tilesetImageFile .= $this->tilesetImage;
+        
+        // godot scene opening
+        $this->godotScene = "[gd_scene load_steps=3 format=2]\n\n
+[ext_resource path=\"$tilesetImageFile\" type=\"Texture\" id=1]\n\n";
+
+        // adding the tileset prebuild string
+        $this->godotScene .= $this->godotTileset;
+        
+        // add a parental node for the tilemap
+        $this->godotScene .= "\n\n[node name=\"Map\" type=\"Node2D\"]\n\n";
+        
+        // add the godot tilemap itself
+        $this->godotScene .= $this->godotTilemap;
+    }
+    
+    public function writeGodotSceneExport() {
+        // prepare the export file name
+        $outFileName = $this->options["input"] . "_export";
+        if(isset($this->options["output"])) {
+            $outFileName = $this->options["output"];
+        }
+        
+        // write the prebuild godot output scene string to file
+        file_put_contents("output/" . $outFileName . ".tscn",$this->godotScene);
+        
     }
     
     
