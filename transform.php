@@ -23,11 +23,13 @@ $cli->registerParam("input",true);
 $cli->registerParam("output",true);
 $cli->registerParam("gdPath",true);
 $cli->registerParam("tileset",true);
+$cli->registerParam("merge",true);
 $arrOptions = $cli->parse();
 
 // run the transformer
 $transformer = new Transformer($arrOptions);
 $transformer->readTilesetImage();
+$transformer->extractCollisionShapesFromGodotScene();
 $transformer->parseTilekitFile();
 $transformer->createMappedTileIndex();
 $transformer->buildGodotTileset();
@@ -73,7 +75,11 @@ class Transformer {
     public $godotScene;
     
     // godot vars
-    public $godotxMax = 65536; 
+    public $godotxMax = 65536;
+    
+    // godot scene merge caches
+    public $godotMergeResources = false;
+    public $godotMergeExtract = [];
     
     
     public function __construct($options) {
@@ -165,7 +171,7 @@ class Transformer {
     
     public function buildGodotTileset() {
         // tileset opening
-        $this->godotTileset = "\n[sub_resource type=\"TileSet\" id=1]\n";
+        $this->godotTileset = "\n[sub_resource type=\"TileSet\" id=42000]\n";
         
         // for each recogniced tile
         foreach($this->tileIndexMapping as $index => $tile) {
@@ -184,6 +190,7 @@ class Transformer {
         $tileWidth  = $this->tileWidth;
         $tileHeight = $this->tileHeight;
         
+        
         // build the neccesary lines
         $tilesetEntry  = $id . "/name = \"tile " . $tile . "\"\n";
         $tilesetEntry .= $id . "/texture = ExtResource( 1 )\n";
@@ -192,12 +199,33 @@ class Transformer {
         $tilesetEntry .= $id . "/region = Rect2( $x, $y, $tileWidth , $tileHeight )\n";
         $tilesetEntry .= $id . "/tile_mode = 0\n";
         $tilesetEntry .= $id . "/occluder_offset = Vector2( 0, 0 )\n";
+        
+        if(isset($this->godotMergeExtract[$tile]["occluder"])) {
+            $tilesetEntry .= $id . "/occluder = " . $this->godotMergeExtract[$tile]["occluder"] . "\n";
+        } 
+        
         $tilesetEntry .= $id . "/navigation_offset = Vector2( 0, 0 )\n";
         $tilesetEntry .= $id . "/shape_offset = Vector2( 0, 0 )\n";
         $tilesetEntry .= $id . "/shape_transform = Transform2D( 1, 0, 0, 1, 0, 0 )\n";
+        
+        if(isset($this->godotMergeExtract[$tile]["shape"])) {
+            $tilesetEntry .= $id . "/shape = " . $this->godotMergeExtract[$tile]["shape"] . "\n";
+        } 
+        
         $tilesetEntry .= $id . "/shape_one_way = false\n";
-        $tilesetEntry .= $id . "/shape_one_way_margin = 0.0\n";
-        $tilesetEntry .= $id . "/shapes = [  ]\n";
+        
+        if(isset($this->godotMergeExtract[$tile]["shape_one_way_margin"])) {
+            $tilesetEntry .= $id . "/shape_one_way_margin = " . $this->godotMergeExtract[$tile]["shape_one_way_margin"] . "\n";
+        }  else {
+            $tilesetEntry .= $id . "/shape_one_way_margin = 0.0\n";
+        }
+        
+        if(isset($this->godotMergeExtract[$tile]["shapes"])) {
+            $tilesetEntry .= $id . "/shapes = " . $this->godotMergeExtract[$tile]["shapes"] . "\n";
+        } else {
+            $tilesetEntry .= $id . "/shapes = [  ]\n";
+        }
+
         $tilesetEntry .= $id . "/z_index = 0\n";
         
         return $tilesetEntry;
@@ -213,7 +241,7 @@ class Transformer {
         
         // tileset opening
         $this->godotTilemap = "\n[node name=\"TileMap\" type=\"TileMap\" parent=\".\"]\n";
-        $this->godotTilemap .= "tile_set = SubResource( 1 )
+        $this->godotTilemap .= "tile_set = SubResource( 42000 )
 cell_size = Vector2( $tileWidth, $tileHeight )
 cell_custom_transform = Transform2D( $tileWidth, 0, 0, $tileHeight, 0, 0 )
 format = 1
@@ -253,6 +281,11 @@ tile_data = PoolIntArray(";
         $this->godotScene = "[gd_scene load_steps=3 format=2]\n\n
 [ext_resource path=\"$tilesetImageFile\" type=\"Texture\" id=1]\n\n";
 
+        // do we have sub resource definitions to add?
+        if($this->godotMergeResources) {
+            $this->godotScene .= $this->godotMergeResources;
+        }
+
         // adding the tileset prebuild string
         $this->godotScene .= $this->godotTileset;
         
@@ -272,6 +305,54 @@ tile_data = PoolIntArray(";
         
         // write the prebuild godot output scene string to file
         file_put_contents("output/" . $outFileName . ".tscn",$this->godotScene);
+        file_put_contents("output/" . $outFileName . "_tile_map.json",json_encode($this->tileIndexMapping,JSON_PRETTY_PRINT));
+        
+    }
+    
+    public function extractCollisionShapesFromGodotScene() {
+        // do we have a merge file given?
+        if(!isset($this->options["merge"])) {
+            return;
+        }
+        
+        // exit if given merge file doesnt exist
+        if(!file_exists("input/" . $this->options["merge"])) {
+            pd("Given merge file does not exist'" . $this->options["merge"] . "'");
+        }
+        
+        // read the file
+        $mergeFile = file_get_contents("input/" . $this->options["merge"]);
+        
+        // first we extract the shape definitions
+        $splitA = explode('" type="Texture" id=1]',$mergeFile);
+        $splitB = explode('[sub_resource type="TileSet" id=',$splitA[1]);
+        
+        // do we find any entries? if not we exit
+        if("" == str_replace("\n","",$splitB[0])) {
+            return;
+        }
+        
+        // seems like we found some, so lets store them for later injection
+        $this->godotMergeResources = $splitB[0];
+        
+        // extract the data from tileset input
+        $regex = '/(?P<index>[0-9]+)\/(?P<key>[a-z_]+)\s?=\s?(?P<value>"tile (?<tileID>[0-9]+)"|[a-zA-Z0-9":_,.\(\)\s\[\]\{\}]+)\n/m';
+        preg_match_all($regex, $mergeFile, $matches);
+        $ret = [];
+        foreach($matches['key'] as $k=>$m) {
+            if($m) {
+                if($m == "name") {
+                    $ret[$matches['index'][$k]][$m] = $matches['tileID'][$k];
+                } else {
+                    $ret[$matches['index'][$k]][$m] = $matches['value'][$k];
+                }
+            }
+        }
+        
+        // write the tileset data into custom lookup array
+        foreach($ret as $value) {
+            $this->godotMergeExtract[$value["name"]] = $value;
+        }
         
     }
     
