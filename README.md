@@ -44,6 +44,10 @@ This command would use a "test.json" file and "test.png" file from "input/" dire
 When updating an already transformed/exported file you need to use an additional param named "merge". As merge you define the filename of the existing scene you want to merge with the new transform. The script will detect defined collision shapes and light occluders and merge them into your new transformed file. This way you only need to define collision shapes and light occluders once and not updated on any new transform. The existing godot scene used for merging needs to be inside the "input/" directory too.
 
 
+```bash
+php transform.php input test.json tileset test.png gdPath "Experiment/Map2" output map merge map.tscn
+```
+
 ## Important!
 The current version of the script will only export/transform the map layer and not object layer. Since i have no use for the object layer right now i probably wont implement it in the near future. Feel free to fork the script if you need specific changes.
 
