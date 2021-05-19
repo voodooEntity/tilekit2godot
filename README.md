@@ -20,7 +20,7 @@ Transform tilekit export to json tilemap/tileset
 
 
 # Usage
-## First time tramsform/export 
+## First time transform/export 
 To first time transform/export the tilekit map you need the following params
 * input
 * tileset
